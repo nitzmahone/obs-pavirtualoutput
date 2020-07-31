@@ -2,6 +2,8 @@
 #include <obs-module.h>
 #include <QMainWindow>
 #include <QAction>
+#include <pulse/error.h>
+#include <pulse/simple.h>
 #include "pavirtualoutput.h"
 #include "PAVirtualOutputProps.h"
 
@@ -23,6 +25,7 @@ struct pavirtualoutput_data {
     // config data about this instance of the output
     obs_output_t *output = nullptr;
     bool active = false;
+    pa_simple *pa_ctx = nullptr;
 };
 
 PAVirtualOutputProps* prop;
@@ -62,8 +65,8 @@ bool pavirtualoutput_start(void *data)
     pavirtualoutput_data *state_data = (pavirtualoutput_data*)data;
     audio_t *audio = obs_output_audio(state_data->output);
 
+    auto format_info = audio_output_get_info(audio);
     auto sample_rate = audio_output_get_sample_rate(audio);
-    auto channels = audio_output_get_channels(audio);
 
     // FIXME: create PA stream
     // connect stream for playback
@@ -74,6 +77,29 @@ bool pavirtualoutput_start(void *data)
 //        blog(LOG_WARNING, "pavirtualoutput could not start");
 //        return false;
 //    }
+
+    struct audio_convert_info conv = {};
+    conv.format = AUDIO_FORMAT_16BIT;
+    conv.speakers = SPEAKERS_MONO;
+    conv.samples_per_sec = sample_rate;
+
+    obs_output_set_audio_conversion(state_data->output, &conv);
+
+    auto planes = get_audio_planes(AUDIO_FORMAT_FLOAT_PLANAR, SPEAKERS_STEREO);
+
+    struct pa_sample_spec ss = {};
+    ss.format = PA_SAMPLE_S16LE;
+    ss.rate = conv.samples_per_sec;
+    ss.channels = get_audio_channels(conv.speakers);
+
+    int error;
+    auto *pa_ctx = pa_simple_new(NULL, "OBSVirtualMic", PA_STREAM_PLAYBACK, "OBSVirtualOutputSink", "playback", &ss, NULL, NULL, &error);
+    if(!pa_ctx)
+    {
+        blog(LOG_ERROR, "couldn't connect to PulseAudio sink: %s", pa_strerror(error));
+        return false;
+    }
+    state_data->pa_ctx = pa_ctx;
 
     bool started_ok = obs_output_begin_data_capture(state_data->output, 0);
 
@@ -105,15 +131,26 @@ void pavirtualoutput_stop(void *data, uint64_t ts)
 
 void pavirtualoutput_raw_audio(void *data, struct audio_data *frames)
 {
-    blog(LOG_INFO, "pavirtualoutput got %d frames", frames->frames);
+    auto *state_data = (pavirtualoutput_data*)data;
+    if(!state_data->active)
+        return;
+
+    auto bytect = get_audio_size(AUDIO_FORMAT_16BIT, SPEAKERS_MONO, frames->frames);
+
+    blog(LOG_INFO, "pavirtualoutput got %d frames, total %d bytes", frames->frames, bytect);
+
+    int error;
+    if(0 != pa_simple_write(state_data->pa_ctx, frames->data, bytect, &error))
+        blog(LOG_ERROR, "bang %s", pa_strerror(error));
+}
+
+// no-op; due to (apparently?) a bug in OBS 25.8, raw audio only outputs don't get called
+void pavirtualoutput_raw_video(void* data, struct video_data* frame)
+{
+
 }
 
 // these are probably not necessary
-
-void pavirtualoutput_raw_video(void* data, struct video_data* frame)
-{
-    //blog(LOG_INFO, "pavirtualoutput VIDEO got stuff");
-}
 
 obs_properties_t* pavirtualoutput_get_properties(void* data)
 {
@@ -138,7 +175,7 @@ struct obs_output_info create_output_info()
 {
     struct obs_output_info output_info = {};
     output_info.id = "pavirtualoutput";
-    output_info.flags = OBS_OUTPUT_AV;
+    output_info.flags = OBS_OUTPUT_AV;  // seems like a bug that we can't just do OBS_OUTPUT_AUDIO
     output_info.get_name = pavirtualoutput_get_name;
     output_info.create = pavirtualoutput_create;
     output_info.destroy = pavirtualoutput_destroy;
@@ -165,7 +202,7 @@ bool obs_module_load(void)
     obs_data_release(settings);
 
     QMainWindow* main_window = (QMainWindow*)obs_frontend_get_main_window();
-    QAction *action = (QAction*)obs_frontend_add_tools_menu_qaction("Pulse Audio Virtual Output");
+    QAction *action = (QAction*)obs_frontend_add_tools_menu_qaction("PulseAudio Virtual Output");
 
     prop = new PAVirtualOutputProps(main_window);
 
