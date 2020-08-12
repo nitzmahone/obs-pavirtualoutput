@@ -13,7 +13,7 @@ OBS_MODULE_USE_DEFAULT_LOCALE("pavirtualsource", "en-US")
 
 /* create PA context
  * find and destroy/create module-null-sink sink_name=OBSVirtualOutputSink sink_properties='device.description="OBSSink"'
- * find and destroy/create module-virtual-source source_name=OBSVirtualMicrophone master=OBSVirtualOutputSink.monitor
+ * find and destroy/create module-virtual-source source_name=OBSVirtualMic master=OBSVirtualOutputSink.monitor
  * create PA stream
  * pa_stream_connect_playback
  * on OBS data available, pa_stream_write
@@ -80,12 +80,10 @@ bool pavirtualoutput_start(void *data)
 
     struct audio_convert_info conv = {};
     conv.format = AUDIO_FORMAT_16BIT;
-    conv.speakers = SPEAKERS_MONO;
-    conv.samples_per_sec = sample_rate;
+    conv.samples_per_sec = 44100;
+    conv.speakers = SPEAKERS_STEREO;
 
     obs_output_set_audio_conversion(state_data->output, &conv);
-
-    auto planes = get_audio_planes(AUDIO_FORMAT_FLOAT_PLANAR, SPEAKERS_STEREO);
 
     struct pa_sample_spec ss = {};
     ss.format = PA_SAMPLE_S16LE;
@@ -93,7 +91,7 @@ bool pavirtualoutput_start(void *data)
     ss.channels = get_audio_channels(conv.speakers);
 
     int error;
-    auto *pa_ctx = pa_simple_new(NULL, "OBSVirtualMic", PA_STREAM_PLAYBACK, "OBSVirtualOutputSink", "playback", &ss, NULL, NULL, &error);
+    auto *pa_ctx = pa_simple_new(NULL, "OBS PulseAudio Output Plugin", PA_STREAM_PLAYBACK, "OBSVirtualOutputSink", "playback", &ss, NULL, NULL, &error);
     if(!pa_ctx)
     {
         blog(LOG_ERROR, "couldn't connect to PulseAudio sink: %s", pa_strerror(error));
@@ -126,6 +124,8 @@ void pavirtualoutput_stop(void *data, uint64_t ts)
         state_data->active = false;
         obs_output_end_data_capture(state_data->output);
         // FIXME: disconnect PA stream playback
+        pa_simple_free(state_data->pa_ctx);
+        state_data->pa_ctx = nullptr;
     }
 }
 
@@ -135,12 +135,10 @@ void pavirtualoutput_raw_audio(void *data, struct audio_data *frames)
     if(!state_data->active)
         return;
 
-    auto bytect = get_audio_size(AUDIO_FORMAT_16BIT, SPEAKERS_MONO, frames->frames);
-
-    blog(LOG_INFO, "pavirtualoutput got %d frames, total %d bytes", frames->frames, bytect);
+    auto bytect = get_audio_size(AUDIO_FORMAT_16BIT, SPEAKERS_STEREO, frames->frames);
 
     int error;
-    if(0 != pa_simple_write(state_data->pa_ctx, frames->data, bytect, &error))
+    if(0 != pa_simple_write(state_data->pa_ctx, frames->data[0], bytect, &error))
         blog(LOG_ERROR, "bang %s", pa_strerror(error));
 }
 
