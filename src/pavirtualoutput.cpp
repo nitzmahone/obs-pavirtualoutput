@@ -13,7 +13,11 @@ OBS_MODULE_USE_DEFAULT_LOCALE("pavirtualsource", "en-US")
 
 /* create PA context
  * find and destroy/create module-null-sink sink_name=OBSVirtualOutputSink sink_properties='device.description="OBSSink"'
+ * (manual):
+ * pactl load-module module-null-sink sink_name=OBSVirtualOutputSink sink_properties='device.description="OBS\ Virtual\ Sink"'
  * find and destroy/create module-virtual-source source_name=OBSVirtualMic master=OBSVirtualOutputSink.monitor
+ * (manual):
+ * pactl load-module module-virtual-source source_name=OBSVirtualMic master=OBSVirtualOutputSink.monitor source_properties='device.description="OBS\ Virtual\ Microphone"'
  * create PA stream
  * pa_stream_connect_playback
  * on OBS data available, pa_stream_write
